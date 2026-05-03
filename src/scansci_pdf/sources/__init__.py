@@ -56,18 +56,30 @@ STRATEGIES = {
 def _try_source(
     source_fn: Any, doi: str, output_path: Path, config: dict[str, Any], label: str, use_tor: bool = False
 ) -> dict[str, Any] | None:
+    from .scoring import record_result, classify_error, get_user_advice
+    t0 = time.time()
     try:
         sig = inspect.signature(source_fn)
         if "use_tor" in sig.parameters:
             result = source_fn(doi, output_path, config, use_tor=use_tor)
         else:
             result = source_fn(doi, output_path, config)
+        latency_ms = (time.time() - t0) * 1000
         if result:
             result["doi"] = doi
             result["identifier"] = doi
+            if result.get("success"):
+                record_result(label, True, latency_ms)
+            else:
+                error_type = classify_error(result.get("status_code", 0))
+                record_result(label, False, latency_ms, error_type)
         return result
     except Exception as e:
-        log.info(f"   Exception in {label}: {e}")
+        latency_ms = (time.time() - t0) * 1000
+        error_type = classify_error(exception=e)
+        record_result(label, False, latency_ms, error_type)
+        advice = get_user_advice(error_type, label)
+        log.info(f"   Exception in {label}: {e} ({advice})")
         return None
 
 
@@ -194,6 +206,17 @@ def _build_tiers(doi: str, config: dict[str, Any], strategy: str, *, use_vpnsci:
     # WebVPN is last resort - requires use_vpnsci=True and valid session
     tier6_vpnsci = [(try_vpnsci, "WebVPN")] if use_vpnsci and config.get("vpnsci_enabled", False) else []
 
+    from .scoring import sort_sources
+
+    # Sort sources within each tier by adaptive score
+    tier1_oa = sort_sources(tier1_oa)
+    tier2_discovery = sort_sources(tier2_discovery)
+    tier3_oa = sort_sources(tier3_oa)
+    tier3b_content = sort_sources(tier3b_content)
+    tier4_libgen = sort_sources(tier4_libgen)
+    tier5_scihub = sort_sources(tier5_scihub)
+    tier6_vpnsci = sort_sources(tier6_vpnsci)
+
     if strategy == "scihub_only":
         return [(tier5_scihub, "Sci-Hub", 30)] if tier5_scihub else []
 
@@ -217,17 +240,11 @@ def _build_tiers(doi: str, config: dict[str, Any], strategy: str, *, use_vpnsci:
             (tier6_vpnsci, "WebVPN", 25),
         ]
 
-    # "fastest" (default): speed-based tiers, all race in parallel
-    # Tier 1: CDN/direct (4s) - Publisher, Unpaywall, OpenAlex, SemanticScholar
-    # Tier 2: OA discovery (10s) - DOAJ, CrossrefPage
-    # Tier 3: More OA (8s) - EuropePMC, CORE, PMC
-    # Tier 3b: Content API (10s) - only if user has API key
-    # Tier 4: Grey (45s) - LibGen, Sci-Hub
-    tier3_more_oa = [
+    tier3_more_oa = sort_sources([
         (try_europepmc, "EuropePMC"),
         (try_core, "CORE"),
         (try_pmc, "PMC"),
-    ]
+    ])
     tier4_grey = tier4_libgen + tier5_scihub
     tiers = [
         (tier1_oa, "Flash", 4),

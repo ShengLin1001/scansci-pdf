@@ -183,6 +183,31 @@ def scansci_pdf_health_check(detailed: bool = False) -> str:
 
 
 @mcp_app.tool()
+def scansci_pdf_source_scores() -> str:
+    """Show adaptive source health scores based on download history.
+
+    Returns per-source success rate (EMA), latency, and attempts.
+    Sources with low scores are deprioritized in download racing.
+    """
+    from .sources.scoring import get_all_scores
+    scores = get_all_scores()
+    if not scores:
+        return json.dumps({"message": "No download history yet. Scores will build after first downloads."})
+    # Sort by score descending
+    sorted_scores = sorted(scores.items(), key=lambda x: x[1].get("success_ema", 0), reverse=True)
+    result = []
+    for source, data in sorted_scores:
+        result.append({
+            "source": source,
+            "success_rate": round(data.get("success_ema", 0) * 100, 1),
+            "avg_latency_ms": round(data.get("latency_ema", 0)),
+            "attempts": data.get("attempts", 0),
+            "last_error": data.get("last_error", ""),
+        })
+    return json.dumps({"sources": result}, ensure_ascii=False, indent=2)
+
+
+@mcp_app.tool()
 def scansci_pdf_config_get() -> str:
     """Get current scansci-pdf configuration (sensitive values masked)."""
     return json.dumps(get_config_safe(), ensure_ascii=False, indent=2)
