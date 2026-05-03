@@ -1,0 +1,40 @@
+services:
+  scansci-pdf:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - TOR_PROXY=socks5h://tor:1080
+      - FLARESOLVERR_URL=http://flaresolverr:8191
+      - SCANSCI_PDF_DATA_DIR=/data/paper-fetch
+      - NO_PROXY=localhost,127.0.0.1,flaresolverr,tor
+    volumes:
+      - scansci-pdf-data:/data/paper-fetch
+    depends_on:
+      - tor
+    networks:
+      - scansci-pdf-net
+    restart: unless-stopped
+
+  tor:
+    image: shahradel/torproxy:latest
+    ports:
+      - "1080:1080"
+    networks:
+      - scansci-pdf-net
+    restart: unless-stopped
+
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    ports:
+      - "8191:8191"
+    networks:
+      - scansci-pdf-net
+    restart: unless-stopped
+
+networks:
+  scansci-pdf-net:
+    driver: bridge
+
+volumes:
+  scansci-pdf-data:
