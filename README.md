@@ -54,6 +54,7 @@ pip install scansci-pdf
 | Windsurf | AI 代码编辑器 |
 | Cline | VS Code 插件 Agent |
 | Cherry Studio | 多模型桌面客户端 |
+| OpenClaw | MCP 客户端 |
 | 任何 MCP 兼容客户端 | MCP 是开放协议，任何实现均可接入 |
 
 <details>
