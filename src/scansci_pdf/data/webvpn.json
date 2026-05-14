@@ -287,6 +287,9 @@
       "crypto_key": "wrdvpnisthebest!",
       "crypto_iv": "wrdvpnisthebest!"
     },
+    "南京农业大学": {
+      "host": "webvpn.njau.edu.cn"
+    },
     "南京工程学院": {
       "host": "webvpn.njit.edu.cn"
     },

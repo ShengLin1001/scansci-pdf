@@ -794,34 +794,28 @@ def try_vpnsci(doi: str, output_path: Path, config: dict[str, Any]) -> dict[str,
     """Try downloading paper through institutional access.
 
     Strategy:
-    1. Try CARSI federated auth (direct publisher login, no proxy)
-    2. Try Camofox browser download (handles CAS auth + Cloudflare)
-    3. Try WebVPN HTTP approach (if session cookies valid)
-    4. Try WebVPN Selenium browser download (legacy fallback)
+    1. Try Camofox browser download (handles CAS auth + Cloudflare)
+    2. Try WebVPN HTTP approach (if session cookies valid)
+    3. Try WebVPN Selenium browser download (legacy fallback)
+
+    Note: CARSI is now a standalone source tier (carsi_source.try_carsi),
+    called independently from the download orchestrator.
     """
     if not config.get("vpnsci_enabled", False):
         return None
 
-    # Step 1: Try CARSI (direct publisher auth, works without WebVPN proxy)
-    resolved_url = _resolve_doi_url(doi)
-    if not resolved_url:
-        resolved_url = f"https://doi.org/{doi}"
-    carsi_result = _try_carsi(doi, resolved_url, output_path, config)
-    if carsi_result:
-        return carsi_result
-
-    # Step 2: Try Camofox browser download (preferred, handles CAS + Cloudflare)
+    # Step 1: Try Camofox browser download (preferred, handles CAS + Cloudflare)
     result = _try_vpnsci_camofox(doi, output_path, config)
     if result:
         return result
 
-    # Step 3: Try WebVPN HTTP approach (if session cookies valid)
+    # Step 2: Try WebVPN HTTP approach (if session cookies valid)
     if _validate_session(config):
         result = _try_vpnsci_http(doi, output_path, config)
         if result:
             return result
 
-    # Step 4: Try Selenium browser download (legacy fallback)
+    # Step 3: Try Selenium browser download (legacy fallback)
     log.info("   [WebVPN] Trying Selenium browser download...")
     result = _try_vpnsci_selenium(doi, output_path, config)
     if result:

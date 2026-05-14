@@ -43,6 +43,7 @@ from .semantic_scholar import try_semanticscholar
 from .unpaywall import try_unpaywall
 from .vpnsci import try_vpnsci
 from .ezproxy import try_ezproxy
+from .carsi_source import try_carsi
 
 __all__ = ["download", "batch_download"]
 
@@ -255,8 +256,10 @@ def _build_tiers(doi: str, config: dict[str, Any], strategy: str, *, use_vpnsci:
     tier5_scihub = [(try_scihub, "Sci-Hub")] if config.get("scihub_enabled", False) else []
     # WebVPN is last resort - requires use_vpnsci=True and valid session
     tier6_vpnsci = [(try_vpnsci, "WebVPN")] if use_vpnsci and config.get("vpnsci_enabled", False) else []
+    # CARSI federated auth - independent of WebVPN, uses publisher SSO directly
+    tier6b_carsi = [(try_carsi, "CARSI")] if config.get("carsi_enabled", False) and config.get("carsi_idp_name", "").strip() else []
     # EZProxy institutional proxy - separate from WebVPN, uses library proxy
-    tier6b_ezproxy = [(try_ezproxy, "EZProxy")] if use_vpnsci and config.get("ezproxy_enabled", False) else []
+    tier6c_ezproxy = [(try_ezproxy, "EZProxy")] if use_vpnsci and config.get("ezproxy_enabled", False) else []
 
     from .scoring import sort_sources
 
@@ -280,8 +283,10 @@ def _build_tiers(doi: str, config: dict[str, Any], strategy: str, *, use_vpnsci:
             (tier3b_content, "ContentAPI", 10),
             (tier6_vpnsci, "WebVPN", 20),
         ]
-        if tier6b_ezproxy:
-            result.append((tier6b_ezproxy, "EZProxy", 25))
+        if tier6b_carsi:
+            result.append((tier6b_carsi, "CARSI", 25))
+        if tier6c_ezproxy:
+            result.append((tier6c_ezproxy, "EZProxy", 25))
         return result
 
     if strategy == "oa_first":
@@ -294,8 +299,10 @@ def _build_tiers(doi: str, config: dict[str, Any], strategy: str, *, use_vpnsci:
             (tier5_scihub, "Sci-Hub", 45),
             (tier6_vpnsci, "WebVPN", 25),
         ]
-        if tier6b_ezproxy:
-            result.append((tier6b_ezproxy, "EZProxy", 25))
+        if tier6b_carsi:
+            result.append((tier6b_carsi, "CARSI", 25))
+        if tier6c_ezproxy:
+            result.append((tier6c_ezproxy, "EZProxy", 25))
         return result
 
     tier3_more_oa = sort_sources([
@@ -314,8 +321,10 @@ def _build_tiers(doi: str, config: dict[str, Any], strategy: str, *, use_vpnsci:
     tiers.append((tier4_grey, "Grey", 45))
     if tier6_vpnsci:
         tiers.append((tier6_vpnsci, "WebVPN", 20))
-    if tier6b_ezproxy:
-        tiers.append((tier6b_ezproxy, "EZProxy", 25))
+    if tier6b_carsi:
+        tiers.append((tier6b_carsi, "CARSI", 25))
+    if tier6c_ezproxy:
+        tiers.append((tier6c_ezproxy, "EZProxy", 25))
     return tiers
 
 
