@@ -22,3 +22,19 @@ webvpn.dat
 *.c
 *.pyd
 *.so
+
+# Playwright MCP browser logs, screenshots, page snapshots
+.playwright-mcp/
+
+# Test artifacts
+test_output/
+
+# Claude Code local settings
+.claude/
+
+# Temporary test scripts
+batch_download_*.py
+download_*.py
+login_and_download.py
+test_download*.py
+ISSUE_REPORT*.md
