@@ -81,8 +81,8 @@ def ezproxy_login(config: dict[str, Any]) -> bool:
     """Open browser for EZProxy login. Tries stealth browser first, falls back to Selenium."""
     # Try stealth browser (stealth browser) first
     try:
-        from ..camofox_login import ezproxy_login as _camofox_ezproxy
-        if _camofox_ezproxy(config):
+        from ..browser_login import ezproxy_login as _browser_ezproxy
+        if _browser_ezproxy(config):
             return True
     except Exception as exc:
         log.info(f"   [EZProxy] stealth browser login failed: {exc}")

@@ -73,7 +73,7 @@ def _restore_cookies_to_context(context: Any, config: dict[str, Any]) -> None:
 
 
 @contextlib.contextmanager
-def _visible_camofox(config: dict[str, Any], publisher: str, *, viewport: dict | None = None):
+def _visible_browser(config: dict[str, Any], publisher: str, *, viewport: dict | None = None):
     """Open visible CloakBrowser with persistent profile. Falls back to ephemeral."""
     if not _HAS_CLOAKBROWSER:
         raise RuntimeError("cloakbrowser not installed. Run: pip install cloakbrowser")
@@ -114,7 +114,7 @@ def _save_all_cookie_formats(
     publisher: str,
     config: dict[str, Any],
 ) -> None:
-    """Save cookies in all formats: JSON, Netscape, publisher subset, + bridge to camofox-browser."""
+    """Save cookies in all formats: JSON, Netscape, publisher subset, + bridge to CloakBrowser."""
     from .config import DATA_DIR
     from .browser_cookies import cookies_to_netscape, _save_cookies_json
 
@@ -133,7 +133,7 @@ def _save_all_cookie_formats(
     (carsi_dir / f"{publisher.lower()}.json").write_text(
         json.dumps(cookie_data, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    # 2. Save Netscape format (for camofox-browser import)
+    # 2. Save Netscape format (for CloakBrowser import)
     netscape_text = cookies_to_netscape(cookies)
     netscape_file = cache_dir / "publisher_cookies.txt"
     netscape_file.write_text(netscape_text, encoding="utf-8")
@@ -147,20 +147,21 @@ def _save_all_cookie_formats(
         "academic.oup.com", "iop.org", "iopscience.iop.org",
         "aps.org", "journals.aps.org", "aip.org", "pubs.aip.org",
         "dl.acm.org", "acm.org", "science.org", "sciencemag.org",
+        "ascelibrary.org", "sagepub.com", "journals.sagepub.com",
     ]
     pub_cookies = [c for c in cookie_data
                    if any(c.get("domain", "").endswith(d) for d in _pub_domains)]
     if pub_cookies:
         _save_cookies_json(pub_cookies, cache_dir / "publisher_cookies.json")
 
-    # 4. Bridge to camofox-browser headless service
+    # 4. Bridge to CloakBrowser headless service
     try:
-        from .camofox import import_cookies, is_available
+        from .browser_engine import import_cookies, is_available
         if is_available(config):
             imported = import_cookies(str(netscape_file), config)
-            log.info(f"   [{publisher}] bridged {imported} cookies to camofox-browser service")
+            log.info(f"   [{publisher}] bridged {imported} cookies to CloakBrowser service")
     except Exception as _e:
-        log.info(f"   [{publisher}] camofox-browser bridge note: {_e}")
+        log.info(f"   [{publisher}] CloakBrowser bridge note: {_e}")
 
     log.info(f"   [{publisher}] saved {len(cookies)} cookies in all formats")
 
@@ -206,8 +207,8 @@ def _has_publisher_cookies(config: dict[str, Any]) -> bool:
 
 
 def _inject_cookies_to_tab(tab_id: str, config: dict[str, Any], publisher: str) -> None:
-    """Inject saved publisher + CARSI cookies into camofox-browser session."""
-    from .camofox import import_cookies
+    """Inject saved publisher + CARSI cookies into CloakBrowser session."""
+    from .browser_engine import import_cookies
     from .config import DATA_DIR
     cache_dir = Path(config.get("cache_dir", str(DATA_DIR / "cache")))
     total = 0
@@ -236,13 +237,13 @@ def _inject_cookies_to_tab(tab_id: str, config: dict[str, Any], publisher: str) 
                 pass
 
     if total > 0:
-        log.info(f"   [{publisher}] imported {total} cookies into camofox session")
+        log.info(f"   [{publisher}] imported {total} cookies into browser session")
 
 
 def _try_institutional_login(tab_id: str, config: dict[str, Any], publisher: str) -> bool:
     """Try institutional login (OpenAthens/CARSI) when paywall detected.
 
-    Works within the existing camofox-browser tab:
+    Works within the existing CloakBrowser tab:
     1. Find and click "Institutional login" / SSO link
     2. Search for configured institution
     3. Wait for user to complete CAS login
@@ -250,7 +251,7 @@ def _try_institutional_login(tab_id: str, config: dict[str, Any], publisher: str
 
     Returns True if login succeeded (cookies saved).
     """
-    from .camofox import evaluate_js, navigate_tab
+    from .browser_engine import evaluate_js, navigate_tab
 
     idp_name = config.get("carsi_idp_name", "")
     if not idp_name:
@@ -345,7 +346,7 @@ def _try_institutional_login(tab_id: str, config: dict[str, Any], publisher: str
     needs_login = any(x in current_url.lower() for x in _ak) or any(x in current_title for x in _at)
 
     if needs_login:
-        # camofox-browser is headless — user can't see the tab
+        # CloakBrowser is headless — user can't see the tab
         # Open a visible browser window for the CAS login
         log.info(f"   [{publisher}] CAS login required — opening visible browser...")
         return _visible_institutional_login(current_url, config, publisher, idp_name, idp_en, tab_id)
@@ -360,9 +361,9 @@ def _visible_institutional_login(
     idp_name: str, idp_en: str, headless_tab_id: str,
 ) -> bool:
     """Open a visible browser for CAS login, then inject cookies back."""
-    from .camofox import evaluate_js, navigate_tab, import_cookies
+    from .browser_engine import evaluate_js, navigate_tab, import_cookies
 
-    with _visible_camofox(config, publisher, viewport=None) as (context, page):
+    with _visible_browser(config, publisher, viewport=None) as (context, page):
 
         # Start from article page to get Cloudflare clearance, then do SSO flow
         article_url = evaluate_js(headless_tab_id, "window.location.href", config) or cas_url
@@ -475,7 +476,7 @@ def _visible_browser_download(
     search_selectors = sso_cfg["search_selectors"]
     pdf_paths = sso_cfg["pdf_paths"](doi)
 
-    with _visible_camofox(config, publisher) as (context, page):
+    with _visible_browser(config, publisher) as (context, page):
 
         # For Elsevier DOIs, avoid linkinghub.elsevier.com by using direct URL
         if publisher == "Elsevier" and ("doi.org/" in article_url or "linkinghub" in article_url):
@@ -522,10 +523,10 @@ def _visible_browser_download(
                         pass
 
         # Wait for Cloudflare challenge to resolve (visible browser can pass it)
-        for _cf_wait in range(6):
-            _cf_title = (page.title() or "").lower()
-            if any(_sig in _cf_title for _sig in ("just a moment", "attention required", "verify", "security check")):
-                log.info(f"   [{publisher}] Cloudflare challenge detected, waiting... ({_cf_wait+1}/6)")
+        from .network import is_cloudflare_challenge
+        for _cf_wait in range(12):
+            if is_cloudflare_challenge(page.title() or ""):
+                log.info(f"   [{publisher}] Cloudflare challenge detected, waiting... ({_cf_wait+1}/12)")
                 time.sleep(5)
             else:
                 break
@@ -633,7 +634,7 @@ def _visible_browser_download(
         log.info(f"   [{publisher}] login successful, downloading PDF...")
         time.sleep(3)
 
-        # Save cookies for future use (all formats + bridge to camofox-browser)
+        # Save cookies for future use (all formats + bridge to CloakBrowser)
         try:
             cookies = context.cookies()
             _save_all_cookie_formats(cookies, publisher, config)
@@ -958,8 +959,9 @@ _SSO_LINK_FINDER_JS: str = (
     "  const sso = links.find(a => a.href &&"
     "    (a.href.includes('ssostart') || a.href.includes('shibboleth')"
     "     || a.href.includes('saml') || a.href.includes('institutional-login')"
-    "     || a.href.includes('federation')));"
-    "  if (sso) { sso.click(); return sso.href; }"
+    "     || a.href.includes('federation') || a.href.includes('/action/showLogin')"
+    "     || a.href.includes('/institutional-access') || a.href.includes('wayf')));"
+    "  if (sso) { return sso.href; }"
     "  return false;"
     "}"
 )
@@ -1284,21 +1286,21 @@ def _browser_download(
     *,
     wait_for_loading: float = 0,
 ) -> bool:
-    """Navigate to article page via camofox, find PDF link, download it."""
-    from .camofox import (
+    """Navigate to article page via browser, find PDF link, download it."""
+    from .browser_engine import (
         is_available, create_tab, close_tab, evaluate_js,
-        navigate_tab, download_pdf_via_camofox, _is_pdf_url,
+        navigate_tab, download_pdf_via_browser, _is_pdf_url,
         fetch_url, get_captured_responses,
     )
     from .pdf_utils import is_pdf_file
 
     _clear_error()
 
-    # Campus network fast-path: skip HTTP, go directly to Camofox
-    # Campus networks use IP authentication, so Camofox can access directly
+    # Campus network fast-path: skip HTTP, go directly to CloakBrowser
+    # Campus networks use IP authentication, so CloakBrowser can access directly
     if _is_campus_network(config) and is_available(config):
-        log.info(f"   [{publisher}] campus network detected, using Camofox directly")
-        if download_pdf_via_camofox(article_url, output_path, config):
+        log.info(f"   [{publisher}] campus network detected, using CloakBrowser directly")
+        if download_pdf_via_browser(article_url, output_path, config):
             from .pdf_utils import is_pdf_file, success
             if is_pdf_file(output_path):
                 log.info(f"   [{publisher}] campus network download succeeded")
@@ -1392,7 +1394,7 @@ def _browser_download(
             html = evaluate_js(tab_id, "document.documentElement.outerHTML", config) or ""
             if _is_challenge_page(html):
                 log.info(f"   [{publisher}] challenge did not resolve")
-                _set_error("cloudflare_blocked", "use_proxy_or_camofox")
+                _set_error("cloudflare_blocked", "use_proxy_or_browser")
                 return False
 
         # Check for paywall AFTER challenge resolution
@@ -1591,8 +1593,8 @@ def _browser_download(
             if _try_http_download(pdf_url, output_path, config):
                 return True
 
-            # Fall back to full camofox download
-            return download_pdf_via_camofox(pdf_url, output_path, config)
+            # Fall back to full browser download
+            return download_pdf_via_browser(pdf_url, output_path, config)
 
         # For Elsevier/Cell Press: try specific PDF link patterns
         if publisher == "Elsevier":
@@ -1618,7 +1620,7 @@ def _browser_download(
                 close_tab(tab_id, config)
                 if _try_http_download(pdf_url, output_path, config):
                     return True
-                return download_pdf_via_camofox(pdf_url, output_path, config)
+                return download_pdf_via_browser(pdf_url, output_path, config)
 
         # For Wiley: specifically look for pdfdirect
         if publisher == "Wiley":
@@ -1643,7 +1645,7 @@ def _browser_download(
                 close_tab(tab_id, config)
                 if _try_http_download(pdf_url, output_path, config):
                     return True
-                return download_pdf_via_camofox(pdf_url, output_path, config)
+                return download_pdf_via_browser(pdf_url, output_path, config)
 
         # For IEEE: look for stamp URL
         if publisher == "IEEE":
@@ -1661,7 +1663,7 @@ def _browser_download(
             if pdf_url and isinstance(pdf_url, str):
                 log.info(f"   [{publisher}] IEEE stamp: {pdf_url[:80]}")
                 close_tab(tab_id, config)
-                return download_pdf_via_camofox(pdf_url, output_path, config)
+                return download_pdf_via_browser(pdf_url, output_path, config)
 
         log.info(f"   [{publisher}] no PDF link found on page")
         if not _last_error_type:
@@ -1840,14 +1842,14 @@ def try_elsevier_browser(
     """Elsevier/ScienceDirect/Cell Press browser strategy."""
     from .pdf_utils import is_pdf_file
     from .pdf_utils import success
-    from .camofox import is_available as camofox_available, download_pdf_via_camofox
+    from .browser_engine import is_available as browser_available, download_pdf_via_browser
 
-    # Campus network fast-path: skip HTTP, go directly to Camofox
-    if _is_campus_network(config) and camofox_available(config):
+    # Campus network fast-path: skip HTTP, go directly to CloakBrowser
+    if _is_campus_network(config) and browser_available(config):
         cell_url = _build_cell_press_url(doi)
         if cell_url:
-            log.info(f"   [Elsevier] campus network detected, trying Camofox directly: {cell_url[:80]}")
-            if download_pdf_via_camofox(cell_url, output_path, config):
+            log.info(f"   [Elsevier] campus network detected, trying CloakBrowser directly: {cell_url[:80]}")
+            if download_pdf_via_browser(cell_url, output_path, config):
                 if is_pdf_file(output_path):
                     log.info(f"   [Elsevier] campus network download succeeded")
                     return success(doi, output_path, "CellPress(Campus)")
@@ -1898,8 +1900,8 @@ def _cell_press_showpdf_download(
     output_path: Path,
     config: dict[str, Any],
 ) -> dict[str, Any] | None:
-    """Download a Cell Press showPdf URL via camofox network capture."""
-    from .camofox import create_tab, close_tab, fetch_url
+    """Download a Cell Press showPdf URL via browser network capture."""
+    from .browser_engine import create_tab, close_tab, fetch_url
     from .pdf_utils import success
 
     tab_id = create_tab("https://example.com", config, timeout=15.0)
@@ -2037,13 +2039,13 @@ def try_wiley_browser(
     """Wiley browser strategy with PDFDirect."""
     from .pdf_utils import is_pdf_file
     from .pdf_utils import success
-    from .camofox import is_available as camofox_available, download_pdf_via_camofox
+    from .browser_engine import is_available as browser_available, download_pdf_via_browser
 
-    # Campus network fast-path: skip HTTP, go directly to Camofox
-    if _is_campus_network(config) and camofox_available(config):
+    # Campus network fast-path: skip HTTP, go directly to CloakBrowser
+    if _is_campus_network(config) and browser_available(config):
         article_url = f"https://doi.org/{doi}"
-        log.info(f"   [Wiley] campus network detected, trying Camofox directly")
-        if download_pdf_via_camofox(article_url, output_path, config):
+        log.info(f"   [Wiley] campus network detected, trying CloakBrowser directly")
+        if download_pdf_via_browser(article_url, output_path, config):
             if is_pdf_file(output_path):
                 log.info(f"   [Wiley] campus network download succeeded")
                 return success(doi, output_path, "Wiley(Campus)")

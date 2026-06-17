@@ -105,7 +105,7 @@ PREPRINT_PREFIXES: dict[str, str] = {
 }
 
 # Fast sources per publisher (used by tiered racing)
-# Browser strategies (ElsevierBrowser, etc.) use camofox for anti-bot bypass
+# Browser strategies (ElsevierBrowser, etc.) use browser for anti-bot bypass
 PUBLISHER_TOOL_MAP: dict[str, list[str]] = {
     "Nature": ["NatureDirect", "PublisherDirect", "NatureBrowser", "Crossref", "Unpaywall"],
     "MDPI": ["MDPIDirect", "Crossref", "Unpaywall"],
@@ -262,11 +262,11 @@ def try_publisher_direct(doi: str, output_path: Path, config: dict[str, Any]) ->
         except Exception as e:
             log.info(f"   [Publisher] {name}: {e}")
 
-    # Phase 2: Browser-based download via camofox (handles anti-bot)
+    # Phase 2: Browser-based download via browser (handles anti-bot)
     publisher = get_publisher(doi)
-    if publisher and config.get("camofox_enabled", True):
-        from ..camofox import is_available as _camofox_avail
-        if _camofox_avail(config):
+    if publisher and config.get("browser_enabled", True):
+        from ..browser_engine import is_available as _browser_avail
+        if _browser_avail(config):
             log.info(f"   [PublisherDirect] Trying browser strategy for {publisher}")
             fn = _FN_MAP.get(f"{publisher}Browser") or _FN_MAP.get("GenericBrowser")
             if fn:
@@ -354,11 +354,11 @@ def try_science_direct(doi: str, output_path: Path, config: dict[str, Any]) -> d
     from ..network import polite_delay
     from ..pdf_utils import is_pdf_file, success, _response_looks_pdf
 
-    def _fetch_pdf_camofox(pdf_url: str) -> "requests.Response | None":  # type: ignore[name-defined]
-        from ..camofox import is_available as _camofox_avail, solve_url as _camofox_solve
-        if not _camofox_avail(config):
+    def _fetch_pdf_browser(pdf_url: str) -> "requests.Response | None":  # type: ignore[name-defined]
+        from ..browser_engine import is_available as _browser_avail, solve_url as _browser_solve
+        if not _browser_avail(config):
             return None
-        result = _camofox_solve(pdf_url, config)
+        result = _browser_solve(pdf_url, config)
         if not result:
             return None
         solution = result.get("solution", {})
@@ -388,7 +388,7 @@ def try_science_direct(doi: str, output_path: Path, config: dict[str, Any]) -> d
     for pdf_url in pdf_urls:
         try:
             polite_delay(config)
-            resp = _fetch_pdf_camofox(pdf_url)
+            resp = _fetch_pdf_browser(pdf_url)
             if resp is None:
                 continue
 
@@ -674,7 +674,7 @@ _FN_MAP.update({
     "BMCDirect": try_bmc_direct,
     # API strategies
     "ElsevierAPI": _elsevier_api_fn(),
-    # Browser strategies via camofox
+    # Browser strategies via browser
     "ElsevierBrowser": _browser_strategy("Elsevier"),
     "WileyBrowser": _browser_strategy("Wiley"),
     "IEEEBrowser": _browser_strategy("IEEE"),

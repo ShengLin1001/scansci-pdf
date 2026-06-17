@@ -31,16 +31,16 @@ except ImportError:
 
 log = get_logger()
 
-# Track domains that require camofox-browser (in-memory, per session)
-_camofox_domains: set[str] = set()
+# Track domains that require CloakBrowser (in-memory, per session)
+_browser_domains: set[str] = set()
 
-def _mark_camofox_required(domain: str, config: dict[str, Any]) -> None:
-    """Mark a domain as requiring camofox-browser for future ranking."""
-    _camofox_domains.add(domain)
+def _mark_browser_required(domain: str, config: dict[str, Any]) -> None:
+    """Mark a domain as requiring CloakBrowser for future ranking."""
+    _browser_domains.add(domain)
 
-def _is_camofox_domain(domain: str) -> bool:
-    """Check if domain requires camofox-browser."""
-    return domain in _camofox_domains
+def _is_browser_domain(domain: str) -> bool:
+    """Check if domain requires CloakBrowser."""
+    return domain in _browser_domains
 
 _PROBE_TTL_HOURS = 4
 _SCIHUB_PROBE_WORKERS = 8
@@ -55,12 +55,12 @@ def _probe_single_domain(domain: str, proxy: str | None, timeout: tuple[int, int
         resp = s.get(domain, timeout=timeout, proxies=proxies, allow_redirects=True,
                      headers={"User-Agent": USER_AGENT})
         # Accept 200/302/301 as reachable (302/301 = redirect, still means domain is alive)
-        # 403/503 = reachable but blocked (Cloudflare) — still mark reachable for camofox bypass
+        # 403/503 = reachable but blocked (Cloudflare) — still mark reachable for browser bypass
         reachable = resp.status_code in (200, 301, 302, 403, 503)
         ok = resp.status_code == 200 and ("sci-hub" in resp.text[:5000].lower() or "scihub" in resp.text[:5000].lower())
-        # 403/503 with Cloudflare signature = reachable via camofox
+        # 403/503 with Cloudflare signature = reachable via browser
         if resp.status_code in (403, 503) and _is_cloudflare_block(resp):
-            _mark_camofox_required(domain, None)
+            _mark_browser_required(domain, None)
             reachable = True
         latency = (time.time() - t0) * 1000
         return (domain, ok if ok else reachable, latency)
@@ -92,59 +92,59 @@ def _probe_scihub_domains(config: dict[str, Any]) -> None:
     set_probe_timestamp(config)
 
 
-def _is_camofox_available(config: dict[str, Any]) -> bool:
-    """Check if camofox-browser is reachable."""
+def _is_browser_available(config: dict[str, Any]) -> bool:
+    """Check if CloakBrowser is reachable."""
     try:
-        from ..camofox import is_available
+        from ..browser_engine import is_available
         return is_available(config)
     except Exception:
         return False
 
 
-def _camofox_first_download(
+def _browser_first_download(
     landing_url: str,
     doi: str,
     output_path: Path,
     config: dict[str, Any],
 ) -> dict[str, Any] | None:
-    """Try Camofox-first download for Sci-Hub. Bypasses Cloudflare/CAPTCHA."""
+    """Try Browser-first download for Sci-Hub. Bypasses Cloudflare/CAPTCHA."""
     try:
-        from ..camofox import solve_url, download_pdf_via_camofox
+        from ..browser_engine import solve_url, download_pdf_via_browser
         from ..pdf_utils import is_pdf_file, success, extract_pdf_url_from_html
         from urllib.parse import urlparse
         domain = urlparse(landing_url).netloc or landing_url[:40]
 
-        log.info(f"   [camofox-first] trying {landing_url[:80]}")
+        log.info(f"   [browser-first] trying {landing_url[:80]}")
         result = solve_url(landing_url, config, max_timeout=30000)
         if not result:
-            log.info(f"   [camofox-first] no response")
+            log.info(f"   [browser-first] no response")
             return None
 
         solution = result.get("solution", {})
         html = solution.get("response", "")
         if not html:
-            log.info(f"   [camofox-first] empty response")
+            log.info(f"   [browser-first] empty response")
             return None
 
         # Check for article not found
         lower = html.lower()
         if any(sig in lower for sig in ["article not found", "статья не найдена", "не найден"]):
-            log.info(f"   [camofox-first] article not found on {domain}")
+            log.info(f"   [browser-first] article not found on {domain}")
             return None
 
         # Check for empty embed (Sci-Hub has no PDF)
         if '<embed' in lower and 'src=""' in lower:
-            log.info(f"   [camofox-first] empty embed — article not in Sci-Hub database")
+            log.info(f"   [browser-first] empty embed — article not in Sci-Hub database")
             return None
 
         # Extract PDF URL from HTML
         pdf_url = extract_pdf_url_from_html(html, solution.get("url", landing_url))
         if pdf_url:
-            log.info(f"   [camofox-first] found PDF: {pdf_url[:80]}")
-            # Download via Camofox (handles Cloudflare on PDF host too)
-            if download_pdf_via_camofox(pdf_url, output_path, config):
+            log.info(f"   [browser-first] found PDF: {pdf_url[:80]}")
+            # Download via CloakBrowser (handles Cloudflare on PDF host too)
+            if download_pdf_via_browser(pdf_url, output_path, config):
                 if is_pdf_file(output_path):
-                    return success(doi, output_path, f"Sci-Hub(camofox)")
+                    return success(doi, output_path, f"Sci-Hub(Browser)")
 
         # Check if the response itself is a PDF
         import base64
@@ -156,14 +156,14 @@ def _camofox_first_download(
                     output_path.parent.mkdir(parents=True, exist_ok=True)
                     output_path.write_bytes(pdf_bytes)
                     if is_pdf_file(output_path):
-                        return success(doi, output_path, f"Sci-Hub(camofox)")
+                        return success(doi, output_path, f"Sci-Hub(Browser)")
             except Exception:
                 pass
 
-        log.info(f"   [camofox-first] no PDF found in response")
+        log.info(f"   [browser-first] no PDF found in response")
         return None
     except Exception as e:
-        log.info(f"   [camofox-first] error: {e}")
+        log.info(f"   [browser-first] error: {e}")
         return None
 
 
@@ -176,19 +176,19 @@ def try_scihub_domain(
 ) -> dict[str, Any] | None:
     landing_url = f"{domain.rstrip('/')}/{urllib.parse.quote(doi, safe='/')}"
 
-    # Camofox-first: bypass Cloudflare/CAPTCHA before HTTP attempt
-    if _is_camofox_available(config):
-        result = _camofox_first_download(landing_url, doi, output_path, config)
+    # Browser-first: bypass Cloudflare/CAPTCHA before HTTP attempt
+    if _is_browser_available(config):
+        result = _browser_first_download(landing_url, doi, output_path, config)
         if result:
             return result
 
     try:
         resp = fetch(landing_url, config, stream=True, use_tor=use_tor)
 
-        # Fallback to camofox on Cloudflare/403/CAPTCHA
+        # Fallback to browser on Cloudflare/403/CAPTCHA
         if resp.status_code in (403, 503) or _is_cloudflare_block(resp):
-            _mark_camofox_required(domain, config)
-            resp = _try_camofox(landing_url, config, resp)
+            _mark_browser_required(domain, config)
+            resp = _try_browser(landing_url, config, resp)
             if resp is None:
                 return None
 
@@ -200,16 +200,16 @@ def try_scihub_domain(
         if resp.status_code == 200 and first:
             content_sample = first[:5000].decode('utf-8', errors='ignore').lower()
             if 'captcha' in content_sample or 'recaptcha' in content_sample:
-                log.info(f"   CAPTCHA detected, trying camofox...")
-                # Use camofox to bypass CAPTCHA
-                camofox_resp = _try_camofox(landing_url, config, resp)
-                if camofox_resp is None:
-                    log.warning(f"   camofox failed — is camofox-browser running? Start: cd camofox-browser && npm start")
+                log.info(f"   CAPTCHA detected, trying browser...")
+                # Use browser to bypass CAPTCHA
+                browser_resp = _try_browser(landing_url, config, resp)
+                if browser_resp is None:
+                    log.warning(f"   browser failed — is CloakBrowser running? Start: cd CloakBrowser && npm start")
                     return None
-                # Get new content from camofox response
-                resp = camofox_resp
+                # Get new content from browser response
+                resp = browser_resp
                 first = resp.content[:8192] if resp.content else b""
-                log.info(f"   camofox bypassed CAPTCHA, content size: {len(first)}")
+                log.info(f"   browser bypassed CAPTCHA, content size: {len(first)}")
 
         if _response_looks_pdf(resp, first):
             output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -227,7 +227,7 @@ def try_scihub_domain(
             if is_pdf_file(output_path):
                 return success(doi, output_path, f"Sci-Hub({domain})")
 
-        # Collect full HTML content (camofox responses have _content, direct responses need raw.read)
+        # Collect full HTML content (browser responses have _content, direct responses need raw.read)
         if resp._content:
             html = first + resp._content
         else:
@@ -247,13 +247,13 @@ def try_scihub_domain(
         return None
 
 
-def _try_camofox(
+def _try_browser(
     url: str,
     config: dict[str, Any],
     original_resp: requests.Response,
 ) -> requests.Response | None:
-    """Try camofox-browser to bypass Cloudflare. Returns Response or None."""
-    from ..flaresolverr import solve_url
+    """Try CloakBrowser to bypass Cloudflare. Returns Response or None."""
+    from ..browser_engine import solve_url
     result = solve_url(url, config)
     if not result:
         return None
@@ -261,7 +261,7 @@ def _try_camofox(
     status = solution.get("status", 0)
     if status >= 400:
         return None
-    # Build a Response from camofox solution
+    # Build a Response from browser solution
     resp = requests.Response()
     resp.status_code = status
     html_content = solution.get("response", "")
@@ -298,12 +298,12 @@ def try_scihub(doi: str, output_path: Path, config: dict[str, Any], use_tor: boo
         log.info(f"   Sci-Hub disabled")
         return None
 
-    # Camofox-first pass: try a few reliable domains via Camofox before HTTP
-    if _is_camofox_available(config):
-        camofox_domains = ["https://sci-hub.se", "https://sci-hub.st", "https://sci-hub.ru", "https://sci-hub.ee"]
-        for domain in camofox_domains:
+    # Browser-first pass: try a few reliable domains via CloakBrowser before HTTP
+    if _is_browser_available(config):
+        all_domains_for_browser = config.get("scihub_domains") or DEFAULT_SCIHUB_DOMAINS
+        for domain in all_domains_for_browser[:4]:
             landing_url = f"{domain}/{urllib.parse.quote(doi, safe='/')}"
-            result = _camofox_first_download(landing_url, doi, output_path, config)
+            result = _browser_first_download(landing_url, doi, output_path, config)
             if result:
                 return result
 
@@ -313,7 +313,7 @@ def try_scihub(doi: str, output_path: Path, config: dict[str, Any], use_tor: boo
 
 
     if _HAS_COMPILED_CORE:
-        domains = _select_domains_compiled(all_domains, stats, _is_camofox_domain)
+        domains = _select_domains_compiled(all_domains, stats, _is_browser_domain)
     else:
         now = time.time()
         cooldown_domains = []
@@ -349,8 +349,8 @@ def try_scihub(doi: str, output_path: Path, config: dict[str, Any], use_tor: boo
             success_rate = successes / total
             avg_latency = s.get("avg_latency_ms", 5000)
             score = success_rate * 1000 - avg_latency / 1000
-            # Boost camofox-accessible domains (bypasses Cloudflare)
-            if _is_camofox_available(config) and _is_camofox_domain(d):
+            # Boost browser-accessible domains (bypasses Cloudflare)
+            if _is_browser_available(config) and _is_browser_domain(d):
                 score += 5000
             return score
 

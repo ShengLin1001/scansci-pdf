@@ -25,7 +25,7 @@ __all__ = [
     "rank_domains",
     "record_domain_result",
     "select_domains_for_attempt",
-    # vpnsci_core.pyx
+    # instsci_core.pyx
     "convert_url",
     "construct_publisher_pdf_url",
     "find_pdf_link_in_html",
@@ -37,7 +37,7 @@ __all__ = [
 def _check_availability() -> dict[str, bool]:
     """Check which compiled modules are available."""
     status = {}
-    for mod_name in ("racing", "scihub_core", "vpnsci_core"):
+    for mod_name in ("racing", "scihub_core", "instsci_core"):
         try:
             __import__(f"scansci_pdf._core.{mod_name}")
             status[mod_name] = True

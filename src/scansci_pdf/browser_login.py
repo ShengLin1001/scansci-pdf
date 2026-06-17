@@ -135,14 +135,14 @@ class PersistentBrowser:
             state_file = cache_dir / "browser_state.json"
             state_file.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
 
-            cookie_file = cache_dir / "vpnsci-cookies.json"
+            cookie_file = cache_dir / "instsci-cookies.json"
             cookie_data = [
                 {"name": c["name"], "value": c["value"], "domain": c.get("domain", ""), "path": c.get("path", "/")}
                 for c in cookies
             ]
             cookie_file.write_text(json.dumps(cookie_data, indent=2, ensure_ascii=False), encoding="utf-8")
 
-            netscape_file = cache_dir / "vpnsci-cookies.txt"
+            netscape_file = cache_dir / "instsci-cookies.txt"
             from .browser_cookies import cookies_to_netscape
             netscape_file.write_text(cookies_to_netscape(cookies), encoding="utf-8")
 
@@ -203,23 +203,23 @@ def _save_cookies_json(cookies: list[dict[str, Any]], cookie_file: Path) -> None
 
 
 def _save_cookies_netscape(cookies: list[dict[str, Any]], cookie_file: Path) -> None:
-    """Save cookies in Netscape format (camofox-browser import compatible)."""
+    """Save cookies in Netscape format (CloakBrowser import compatible)."""
     from .browser_cookies import cookies_to_netscape
     cookie_file.write_text(cookies_to_netscape(cookies), encoding="utf-8")
 
 
-def _import_to_camofox_browser(cookie_file: Path, config: dict[str, Any]) -> int:
-    """Import cookies into camofox-browser. Returns count imported."""
+def _import_to_browser(cookie_file: Path, config: dict[str, Any]) -> int:
+    """Import cookies into CloakBrowser. Returns count imported."""
     try:
-        from .camofox import import_cookies, is_available
+        from .browser_engine import import_cookies, is_available
         if not is_available(config):
-            log.info("   [camofox] camofox-browser not running, skipping auto-import")
+            log.info("   [browser] CloakBrowser not running, skipping auto-import")
             return 0
         count = import_cookies(cookie_file, config)
-        log.info(f"   [camofox] Imported {count} cookies into camofox-browser")
+        log.info(f"   [browser] Imported {count} cookies into CloakBrowser")
         return count
     except Exception as exc:
-        log.info(f"   [camofox] Could not auto-import to camofox-browser: {exc}")
+        log.info(f"   [browser] Could not auto-import to CloakBrowser: {exc}")
         return 0
 
 
@@ -241,7 +241,7 @@ def open_login_browser(
         cookie_file: Path to save captured cookies (JSON).
         detect_login: Optional callable(browser_context, page) -> bool for custom login detection.
         max_wait: Max seconds to wait for login.
-        auto_import: Whether to auto-import cookies into camofox-browser.
+        auto_import: Whether to auto-import cookies into CloakBrowser.
         keep_alive: If True, return (True, context, page) without closing browser.
 
     Returns:
@@ -291,7 +291,7 @@ def open_login_browser(
                 log.info(f"   [browser] Login successful! Saved {len(cookies)} cookies.")
                 print(f"  登录成功！Cookie 已保存至 {cookie_file}")
                 if auto_import:
-                    _import_to_camofox_browser(netscape_path, config)
+                    _import_to_browser(netscape_path, config)
                 if keep_alive:
                     return True, context, page
                 browser.close()
@@ -307,7 +307,7 @@ def open_login_browser(
                     log.info(f"   [browser] Login successful! Saved {len(cookies)} cookies.")
                     print(f"  登录成功！Cookie 已保存至 {cookie_file}")
                     if auto_import:
-                        _import_to_camofox_browser(netscape_path, config)
+                        _import_to_browser(netscape_path, config)
                     if keep_alive:
                         return True, context, page
                     browser.close()
@@ -329,7 +329,7 @@ def open_login_browser(
 
 def webvpn_login(config: dict[str, Any]) -> bool:
     """Login to WebVPN via stealth browser."""
-    from .sources.vpnsci import _get_webvpn_base
+    from .sources.instsci import _get_webvpn_base
     base = _get_webvpn_base(config)
     if not base:
         log.info("   [WebVPN] No base URL configured")
@@ -337,7 +337,7 @@ def webvpn_login(config: dict[str, Any]) -> bool:
 
     from .config import DATA_DIR
     cache_dir = Path(config.get("cache_dir", str(DATA_DIR / "cache")))
-    cookie_file = cache_dir / "vpnsci_cookies.json"
+    cookie_file = cache_dir / "instsci_cookies.json"
 
     return open_login_browser(base, config, cookie_file=cookie_file, max_wait=600)
 

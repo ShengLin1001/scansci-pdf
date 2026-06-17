@@ -11,10 +11,17 @@ DATA_DIR = Path(os.environ.get("SCANSCI_PDF_DATA_DIR", str(Path.home() / ".scans
 CONFIG_FILE = DATA_DIR / "config.json"
 
 DEFAULT_SCIHUB_DOMAINS = [
-    "https://sci-hub.se",
+    # Working mirrors (verified 2026-05-31, PDF via sci.bban.top)
+    "https://sci-hub.mksa.top",
+    "https://sci-hub.al",
+    "https://sci-hub.mk",
+    "https://sci-hub.vg",
+    # Cloudflare/CAPTCHA protected (may work via CloakBrowser)
     "https://sci-hub.st",
-    "https://sci-hub.ru",
     "https://sci-hub.ee",
+    "https://sci-hub.ru",
+    # Legacy (currently down, kept for future recovery)
+    "https://sci-hub.se",
     "https://sci-hub.is",
     "https://sci-hub.41610.org",
 ]
@@ -26,10 +33,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "network_proxy": "",
     "scihub_enabled": True,
     "scihub_domains": DEFAULT_SCIHUB_DOMAINS,
-    "vpnsci_enabled": False,
-    "vpnsci_school": "",
-    "vpnsci_base_url": "",
-    "vpnsci_cookie_file": "",
+    "instsci_enabled": False,
+    "instsci_school": "",
+    "instsci_base_url": "",
+    "instsci_cookie_file": "",
     "carsi_enabled": False,
     "carsi_idp_name": "",
     "ezproxy_enabled": False,
@@ -42,26 +49,30 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "read_timeout": 30,
     "request_delay_min": 2.0,
     "request_delay_max": 5.0,
+    "fixed_request_delay_enabled": False,
+    "json_probe_cache_seconds": 3600,
     "cache_ttl_hours": 168,
     "parallel_sources": True,
     "parallel_probes": True,
     "batch_workers": 10,
+    "batch_stagger_seconds": 0.3,
     "min_pdf_size_bytes": 10000,
-    "camofox_enabled": True,
-    "camofox_url": os.environ.get("CAMOFOX_URL", "http://localhost:9377"),
+    "browser_headless": False,
+    "browser_humanize": True,
     "is_campus_network": False,
-    "camofox_api_key": os.environ.get("CAMOFOX_API_KEY", ""),
-    "camofox_access_key": os.environ.get("CAMOFOX_ACCESS_KEY", ""),
     "tor_proxy": os.environ.get("TOR_PROXY", ""),
     "tor_use_bridges": False,
     "use_tor_for_scihub": True,
     "google_scholar_limit": 5,
-    "download_strategy": "fastest",
+    "max_browser_workers": 1,
     "host_concurrency": {},
     "auto_rename": True,
     "zotero_api_key": "",
     "zotero_library_type": "user",
     "zotero_library_id": "",
+    "cookie_path": "",
+    "chrome_profile_dir": "",
+    "carsi_cookie_dir": "",
 }
 
 
@@ -92,8 +103,10 @@ _VALIDATION_RULES: dict[str, tuple[type, Any, Any]] = {
     "read_timeout": (int, 1, 120),
     "request_delay_min": (float, 0, 10),
     "request_delay_max": (float, 0, 30),
+    "json_probe_cache_seconds": (float, 0, 86400),
     "cache_ttl_hours": (float, 0, 8760),
     "batch_workers": (int, 1, 20),
+    "batch_stagger_seconds": (float, 0, 60),
     "min_pdf_size_bytes": (int, 100, 10_000_000),
     "google_scholar_limit": (int, 1, 100),
 }
@@ -131,7 +144,7 @@ def update_config(key: str, value: str) -> dict[str, Any]:
 
 def get_config_safe() -> dict[str, Any]:
     config = load_config()
-    sensitive_keys = ["core_api_key", "vpnsci_cookie_file", "zotero_api_key", "zotero_library_id", "elsevier_api_key", "elsevier_insttoken"]
+    sensitive_keys = ["core_api_key", "instsci_cookie_file", "zotero_api_key", "zotero_library_id", "elsevier_api_key", "elsevier_insttoken"]
     for key in sensitive_keys:
         if config.get(key):
             config[key] = "***"

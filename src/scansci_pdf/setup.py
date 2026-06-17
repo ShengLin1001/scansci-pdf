@@ -99,11 +99,11 @@ def check_docker() -> dict[str, Any]:
     return result
 
 
-def check_camofox() -> dict[str, Any]:
-    """Check camofox-browser connectivity."""
+def check_browser() -> dict[str, Any]:
+    """Check CloakBrowser connectivity."""
     result: dict[str, Any] = {"running": False}
     try:
-        from .camofox import is_available
+        from .browser_engine import is_available
         from .config import load_config
         result["running"] = is_available(load_config())
     except Exception:
@@ -177,7 +177,7 @@ def setup_check() -> dict[str, Any]:
     sys_info = detect_system()
     tor = check_tor()
     docker = check_docker()
-    camofox = check_camofox()
+    browser = check_browser()
 
     commands = get_install_commands(sys_info, tor, docker)
 
@@ -187,18 +187,18 @@ def setup_check() -> dict[str, Any]:
         issues.append("Tor 未运行且 Docker 未安装，Sci-Hub/LibGen 通过 Tor 访问受限")
     if not docker.get("installed"):
         issues.append("Docker 未安装，无法使用 Tor 容器化部署")
-    if not camofox["running"]:
-        issues.append("camofox-browser 未运行，Cloudflare 防护可能无法绕过")
+    if not browser["running"]:
+        issues.append("CloakBrowser 未运行，Cloudflare 防护可能无法绕过")
 
     readiness = "ready" if not issues else "partial"
-    if not tor["running"] and not docker.get("running") and not camofox["running"]:
+    if not tor["running"] and not docker.get("running") and not browser["running"]:
         readiness = "limited"
 
     return {
         "system": sys_info,
         "tor": tor,
         "docker": docker,
-        "camofox": camofox,
+        "browser": browser,
         "install_commands": commands,
         "issues": issues,
         "readiness": readiness,

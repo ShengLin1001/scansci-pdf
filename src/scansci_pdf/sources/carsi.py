@@ -7,6 +7,8 @@ publishers like Elsevier, Springer Nature, Wiley, ACS, etc.
 from __future__ import annotations
 
 import json
+import os
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -124,8 +126,15 @@ class CARSIClient:
             log.warning(f"   [CARSI] Fetch failed: {e}")
             return None
 
-    def download_via_camofox(self, doi: str, article_url: str, output_path: Path) -> dict[str, Any] | None:
-        """Download PDF via stealth browser browser with CARSI auth. Single session: login + download."""
+    def download_via_browser(self, doi: str, article_url: str, output_path: Path) -> dict[str, Any] | None:
+        """Download PDF via browser with CARSI auth. Tries CloakBrowser first, falls back to Selenium."""
+        result = self._download_via_cloakbrowser(doi, article_url, output_path)
+        if result:
+            return result
+        return self._download_via_selenium(doi, article_url, output_path)
+
+    def _download_via_cloakbrowser(self, doi: str, article_url: str, output_path: Path) -> dict[str, Any] | None:
+        """Download PDF via CloakBrowser with CARSI auth. Single session: login + download."""
         publisher = detect_publisher(article_url)
         if not publisher:
             return None
@@ -136,12 +145,12 @@ class CARSIClient:
         try:
             from cloakbrowser import launch  # noqa: F401
         except ImportError:
-            log.info("   [CARSI-Camofox] cloakbrowser not installed")
+            log.info("   [CARSI-Browser] cloakbrowser not installed")
             return None
 
         idp_name = self.config.get("carsi_idp_name", "")
         if not idp_name:
-            log.info("   [CARSI-Camofox] No carsi_idp_name configured")
+            log.info("   [CARSI-Browser] No carsi_idp_name configured")
             return None
 
         idp_en = _IDP_MAP.get(idp_name, idp_name)
@@ -150,11 +159,19 @@ class CARSIClient:
 
         # Serialize browser opens across threads — only one browser at a time
         with self._login_lock:
-            log.info(f"   [CARSI-Camofox] Opening browser for {publisher}...")
+            log.info(f"   [CARSI-Browser] Opening browser for {publisher}...")
             try:
-                from ..publisher_strategies import _visible_camofox, _save_all_cookie_formats
+                from ..publisher_strategies import _visible_browser, _save_all_cookie_formats
 
-                with _visible_camofox(self.config, publisher, viewport=None) as (context, page):
+                with _visible_browser(self.config, publisher, viewport=None) as (context, page):
+                    def _try_save_captured() -> dict[str, Any] | None:
+                        """If a PDF was captured, save and validate it."""
+                        if captured_pdf:
+                            output_path.parent.mkdir(parents=True, exist_ok=True)
+                            output_path.write_bytes(captured_pdf[-1])
+                            if is_pdf_file(output_path):
+                                return _success(doi, output_path, "CARSI-Browser")
+                        return None
 
                     # Restore saved cookies if any (supplements persistent profile)
                     cookie_file = self._cookie_path(publisher)
@@ -168,7 +185,7 @@ class CARSIClient:
                                     pw_cookies.append(pw_c)
                             if pw_cookies:
                                 context.add_cookies(pw_cookies)
-                                log.info(f"   [CARSI-Camofox] Restored {len(pw_cookies)} cookies from file")
+                                log.info(f"   [CARSI-Browser] Restored {len(pw_cookies)} cookies from file")
                         except Exception:
                             pass
 
@@ -187,13 +204,13 @@ class CARSIClient:
                             body = response.body()
                             if len(body) > 5000 and body[:4] == b"%PDF-":
                                 captured_pdf.append(body)
-                                log.info(f"   [CARSI-Camofox] PDF captured: {len(body)} bytes")
+                                log.info(f"   [CARSI-Browser] PDF captured: {len(body)} bytes")
                         except Exception:
                             pass
                     page.on("response", on_response)
 
                     # Step 1: Navigate to article page first (gets Cloudflare clearance)
-                    log.info(f"   [CARSI-Camofox] Loading article: {article_url[:60]}")
+                    log.info(f"   [CARSI-Browser] Loading article: {article_url[:60]}")
                     try:
                         page.goto(article_url, wait_until="domcontentloaded", timeout=60000)
                         time.sleep(5)
@@ -202,18 +219,18 @@ class CARSIClient:
 
                     title = page.title()
                     url = page.url
-                    log.info(f"   [CARSI-Camofox] Page: '{title[:40]}' {url[:60]}")
+                    log.info(f"   [CARSI-Browser] Page: '{title[:40]}' {url[:60]}")
 
                     # Wait for Cloudflare challenge to resolve (visible stealth browser can pass it)
-                    for _cf_wait in range(6):
-                        _cf_title = (page.title() or "").lower()
-                        if any(_sig in _cf_title for _sig in ("just a moment", "attention required", "verify", "security check")):
-                            log.info(f"   [CARSI-Camofox] Cloudflare challenge detected, waiting... ({_cf_wait+1}/6)")
+                    from ..network import is_cloudflare_challenge
+                    for _cf_wait in range(12):
+                        if is_cloudflare_challenge(page.title() or ""):
+                            log.info(f"   [CARSI-Browser] Cloudflare challenge detected, waiting... ({_cf_wait+1}/12)")
                             time.sleep(5)
                         else:
                             break
                     else:
-                        log.info("   [CARSI-Camofox] Cloudflare challenge did not resolve")
+                        log.info("   [CARSI-Browser] Cloudflare challenge did not resolve")
 
                     # Step 1b: Check if restored cookies already grant access
                     has_cookies = cookie_file.exists()
@@ -232,7 +249,7 @@ class CARSIClient:
                             }
                         """)
                     except Exception as _e:
-                        log.info(f"   [CARSI-Camofox] paywall check error (likely Cloudflare): {_e}")
+                        log.info(f"   [CARSI-Browser] paywall check error (likely Cloudflare): {_e}")
                         needs_login = True
 
                     # Even if page looks accessible, verify cookies work by
@@ -242,8 +259,7 @@ class CARSIClient:
                     cookies_valid = False
                     if has_cookies and not needs_login:
                         pii_from_url = ""
-                        import re as _re
-                        _pm = _re.search(r"pii/([A-Z0-9]+)", page.url)
+                        _pm = re.search(r"pii/([A-Z0-9]+)", page.url)
                         if _pm:
                             pii_from_url = _pm.group(1)
                         if pii_from_url:
@@ -260,19 +276,27 @@ class CARSIClient:
                                 """)
                                 cookies_valid = bool(probe_ok)
                                 if cookies_valid:
-                                    log.info("   [CARSI-Camofox] Cookie probe OK, skipping login")
+                                    log.info("   [CARSI-Browser] Cookie probe OK, skipping login")
                                 else:
-                                    log.info("   [CARSI-Camofox] Cookie probe failed, re-login needed")
+                                    log.info("   [CARSI-Browser] Cookie probe failed, re-login needed")
                             except Exception:
-                                log.info("   [CARSI-Camofox] Cookie probe error, will re-login")
+                                log.info("   [CARSI-Browser] Cookie probe error, will re-login")
 
                     if not cookies_valid:
-                        # Step 2: Click "Institutional login" link on article page
-                        sso_clicked = page.evaluate(_SSO_LINK_FINDER_JS)
-                        if not sso_clicked:
-                            log.info("   [CARSI-Camofox] No SSO link found, trying direct login URL...")
-                            page.goto(cfg.login_url, wait_until="domcontentloaded", timeout=30000)
-                            time.sleep(5)
+                        # Step 2: Navigate to "Institutional login" link on article page
+                        sso_href = page.evaluate(_SSO_LINK_FINDER_JS)
+                        if sso_href:
+                            log.info(f"   [CARSI-Browser] Navigating to SSO: {sso_href[:80]}")
+                            try:
+                                page.goto(sso_href, wait_until="domcontentloaded", timeout=30000)
+                            except Exception:
+                                pass
+                        else:
+                            log.info("   [CARSI-Browser] No SSO link found, trying direct login URL...")
+                            try:
+                                page.goto(cfg.login_url, wait_until="domcontentloaded", timeout=30000)
+                            except Exception:
+                                pass
 
                         time.sleep(8)
 
@@ -287,18 +311,18 @@ class CARSIClient:
                         if search_input:
                             search_input.fill(idp_en)
                             time.sleep(3)
-                            log.info(f"   [CARSI-Camofox] Searched for '{idp_en}'")
+                            log.info(f"   [CARSI-Browser] Searched for '{idp_en}'")
 
                             # Click matching institution
                             clicked = page.evaluate(_INSTITUTION_CLICK_JS, idp_en)
                             if clicked:
-                                log.info(f"   [CARSI-Camofox] Selected: {clicked}")
+                                log.info(f"   [CARSI-Browser] Selected: {clicked}")
                                 time.sleep(5)
                             else:
                                 search_input.press("Enter")
                                 time.sleep(3)
                         else:
-                            log.info("   [CARSI-Camofox] No institution search box found")
+                            log.info("   [CARSI-Browser] No institution search box found")
 
                         # Step 4: Wait for CAS login
                         _ak = _AUTH_KEYWORDS
@@ -307,7 +331,7 @@ class CARSIClient:
                         url = page.url
                         title = page.title()
                         if any(x in url.lower() for x in _ak) or any(x in title for x in _at):
-                            log.info("   [CARSI-Camofox] CAS login required. Please log in...")
+                            log.info("   [CARSI-Browser] CAS login required. Please log in...")
                             for i in range(100):
                                 time.sleep(3)
                                 try:
@@ -318,7 +342,7 @@ class CARSIClient:
                                 is_auth = any(x in title for x in _at)
                                 is_auth_url = any(x in url.lower() for x in _ak)
                                 if not is_auth and not is_auth_url:
-                                    # Login success - save cookies in all formats + bridge to camofox-browser
+                                    # Login success - save cookies in all formats + bridge to CloakBrowser
                                     try:
                                         cookies = context.cookies()
                                         _save_all_cookie_formats(cookies, publisher, self.config)
@@ -326,14 +350,14 @@ class CARSIClient:
                                         pass
                                     break
                             else:
-                                log.info("   [CARSI-Camofox] Login timed out")
+                                log.info("   [CARSI-Browser] Login timed out")
                                 return None
                         else:
-                            log.info("   [CARSI-Camofox] Already authenticated")
+                            log.info("   [CARSI-Browser] Already authenticated")
 
                     # Step 5: Navigate to article (with CARSI auth now)
                     time.sleep(2)
-                    log.info(f"   [CARSI-Camofox] Navigating to article: {article_url[:60]}")
+                    log.info(f"   [CARSI-Browser] Navigating to article: {article_url[:60]}")
                     try:
                         page.goto(article_url, wait_until="domcontentloaded", timeout=30000)
                         time.sleep(5)
@@ -341,14 +365,11 @@ class CARSIClient:
                         pass
 
                     # Check for PDF via network capture
-                    if captured_pdf:
-                        output_path.parent.mkdir(parents=True, exist_ok=True)
-                        output_path.write_bytes(captured_pdf[-1])
-                        if is_pdf_file(output_path):
-                            return _success(doi, output_path, "CARSI-Camofox")
+                    saved = _try_save_captured()
+                    if saved:
+                        return saved
 
                     # Step 6: Try direct PDF URL
-                    import re
                     pii_match = re.search(r"pii/([A-Z0-9]+)", page.url)
                     pii_value = pii_match.group(1) if pii_match else ""
                     pdf_pattern = cfg.pdf_pattern.replace("{doi}", doi).replace("{pii}", pii_value)
@@ -358,36 +379,32 @@ class CARSIClient:
                         pdf_url = pdf_pattern
 
                     if pdf_url and "{pii}" not in pdf_url:
-                        log.info(f"   [CARSI-Camofox] Trying PDF: {pdf_url[:80]}")
+                        log.info(f"   [CARSI-Browser] Trying PDF: {pdf_url[:80]}")
                         captured_pdf.clear()
                         try:
                             page.goto(pdf_url, wait_until="commit", timeout=30000)
                             time.sleep(5)
                         except Exception:
                             pass
-                        if captured_pdf:
-                            output_path.parent.mkdir(parents=True, exist_ok=True)
-                            output_path.write_bytes(captured_pdf[-1])
-                            if is_pdf_file(output_path):
-                                return _success(doi, output_path, "CARSI-Camofox")
+                        saved = _try_save_captured()
+                        if saved:
+                            return saved
 
                     # Step 7: Find PDF link in HTML
                     from ..pdf_utils import extract_pdf_url_from_html
                     html = page.content()
                     found_pdf = extract_pdf_url_from_html(html, page.url)
                     if found_pdf:
-                        log.info(f"   [CARSI-Camofox] Found PDF link: {found_pdf[:80]}")
+                        log.info(f"   [CARSI-Browser] Found PDF link: {found_pdf[:80]}")
                         captured_pdf.clear()
                         try:
                             page.goto(found_pdf, wait_until="commit", timeout=30000)
                             time.sleep(5)
                         except Exception:
                             pass
-                        if captured_pdf:
-                            output_path.parent.mkdir(parents=True, exist_ok=True)
-                            output_path.write_bytes(captured_pdf[-1])
-                            if is_pdf_file(output_path):
-                                return _success(doi, output_path, "CARSI-Camofox")
+                        saved = _try_save_captured()
+                        if saved:
+                            return saved
 
                     # Step 8: Click PDF button
                     click_result = page.evaluate("""
@@ -407,27 +424,21 @@ class CARSIClient:
                         }
                     """)
                     if click_result:
-                        log.info(f"   [CARSI-Camofox] Clicked: {str(click_result)[:80]}")
+                        log.info(f"   [CARSI-Browser] Clicked: {str(click_result)[:80]}")
                         time.sleep(8)
-                        if captured_pdf:
-                            output_path.parent.mkdir(parents=True, exist_ok=True)
-                            output_path.write_bytes(captured_pdf[-1])
-                            if is_pdf_file(output_path):
-                                return _success(doi, output_path, "CARSI-Camofox")
+                        saved = _try_save_captured()
+                        if saved:
+                            return saved
 
-                    log.info(f"   [CARSI-Camofox] No PDF found. Title: {page.title()[:40]} URL: {page.url[:60]}")
+                    log.info(f"   [CARSI-Browser] No PDF found. Title: {page.title()[:40]} URL: {page.url[:60]}")
                     return None
 
             except Exception as e:
-                log.info(f"   [CARSI-Camofox] Error: {e}")
+                log.info(f"   [CARSI-Browser] Error: {e}")
                 return None
 
-    def download_via_browser(self, doi: str, article_url: str, output_path: Path) -> dict[str, Any] | None:
-        """Download PDF via browser in a single session (login + download).
-
-        This avoids Cloudflare TLS fingerprinting issues by keeping everything
-        in one browser session.
-        """
+    def _download_via_selenium(self, doi: str, article_url: str, output_path: Path) -> dict[str, Any] | None:
+        """Download PDF via Selenium browser (fallback when CloakBrowser unavailable)."""
         publisher = detect_publisher(article_url)
         if not publisher:
             return None
@@ -536,7 +547,6 @@ class CARSIClient:
 
             # Try pdfft pattern
             if publisher == "sciencedirect":
-                import re
                 pii_match = re.search(r"pii/([A-Z0-9]+)", article_url)
                 if pii_match:
                     pdfft_url = f"https://www.sciencedirect.com/science/article/pii/{pii_match.group(1)}/pdfft"
@@ -599,7 +609,6 @@ class CARSIClient:
         # Check cookie file freshness — accept if < 24h old
         cookie_file = self._cookie_path(publisher)
         try:
-            import os
             age_hours = (time.time() - os.path.getmtime(cookie_file)) / 3600
             if age_hours > 24:
                 log.info(f"   [CARSI] Cookies for {publisher} expired ({age_hours:.1f}h old)")
@@ -630,7 +639,7 @@ class CARSIClient:
 
         # Try stealth browser (stealth browser) first
         try:
-            from ..camofox_login import carsi_login
+            from ..browser_login import carsi_login
             if carsi_login(publisher, self.config, login_url=cfg.login_url, domains=cfg.domains):
                 return True
         except Exception as exc:

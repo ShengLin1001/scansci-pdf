@@ -29,6 +29,17 @@ USER_AGENT = (
     "Chrome/124.0 Safari/537.36 ScanSci PDF/3"
 )
 
+CLOUDFLARE_CHALLENGE_SIGNALS = (
+    "just a moment", "attention required", "verify", "security check",
+    "请稍候", "正在验证", "checking", "cloudflare",
+)
+
+
+def is_cloudflare_challenge(title: str) -> bool:
+    """Check if a page title indicates a Cloudflare/anti-bot challenge."""
+    lower = title.lower()
+    return any(sig in lower for sig in CLOUDFLARE_CHALLENGE_SIGNALS)
+
 _session_pool: dict[str, requests.Session] = {}
 
 
@@ -135,14 +146,14 @@ def _is_cloudflare_block(resp: requests.Response) -> bool:
     return False
 
 
-def fetch_with_camofox(
+def fetch_with_browser(
     url: str,
     config: dict[str, Any],
     *,
     stream: bool = False,
 ) -> requests.Response | None:
-    """Fetch URL using camofox-browser to bypass Cloudflare challenges."""
-    from .camofox import solve_url, is_available
+    """Fetch URL using CloakBrowser to bypass Cloudflare challenges."""
+    from .browser_engine import solve_url, is_available
     if not is_available(config):
         return None
     result = solve_url(url, config)

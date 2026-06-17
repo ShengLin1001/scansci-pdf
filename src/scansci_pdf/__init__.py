@@ -45,7 +45,7 @@ def _fix_ssl_cert_file() -> None:
 
 _fix_ssl_cert_file()
 
-__version__ = "1.4.1"
+__version__ = "1.5.1"
 
 __all__ = [
     "__version__",
@@ -55,9 +55,8 @@ __all__ = [
     "load_config",
     "update_config",
     "get_config_safe",
-    "STRATEGIES",
 ]
 
-from .sources import download, batch_download, STRATEGIES
+from .sources import download, batch_download
 from .search import search_papers
 from .config import load_config, update_config, get_config_safe

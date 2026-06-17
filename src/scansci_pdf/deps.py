@@ -67,7 +67,7 @@ def is_feature_available(feature: str) -> bool:
 
     feature_deps = {
         "socks_proxy": ["socks"],
-        "vpnsci": ["Crypto", "selenium"],
+        "instsci": ["Crypto", "selenium"],
         "html_parse": ["bs4"],
     }
 

@@ -34,7 +34,7 @@ class BuildPyWithEncryption(build_py):
 
         # Try to use compiled core for encryption
         try:
-            from scansci_pdf._core.vpnsci_core import encrypt_data
+            from scansci_pdf._core.instsci_core import encrypt_data
             encrypted = encrypt_data(plaintext)
         except ImportError:
             # Fallback: use pycryptodome directly (for first build before .pyx is compiled)
@@ -56,8 +56,8 @@ try:
 
     extensions = [
         Extension(
-            "scansci_pdf._core.vpnsci_core",
-            ["src/scansci_pdf/_core/vpnsci_core.pyx"],
+            "scansci_pdf._core.instsci_core",
+            ["src/scansci_pdf/_core/instsci_core.pyx"],
         ),
         Extension(
             "scansci_pdf._core.scihub_core",
