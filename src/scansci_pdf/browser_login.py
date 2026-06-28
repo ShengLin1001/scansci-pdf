@@ -7,6 +7,7 @@ import time
 import atexit
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 try:
     from cloakbrowser import launch
@@ -231,6 +232,7 @@ def open_login_browser(
     detect_login: Any = None,
     max_wait: int = 300,
     auto_import: bool = True,
+    manual_confirm: bool = False,
     keep_alive: bool = False,
     publisher: str = "",
 ) -> bool | tuple[bool, Any, Any, Any]:
@@ -277,6 +279,47 @@ def open_login_browser(
             log.info(f"   [browser] Page load warning: {exc}")
             print("  页面加载超时，但仍可手动登录。")
 
+        if manual_confirm:
+            print("  完成网页登录并看到 WebVPN 首页后，回到这个终端按 Enter 保存 Cookie。")
+            print("  如果还没有登录完成，不要按 Enter。\n")
+            try:
+                input()
+            except KeyboardInterrupt:
+                if remote:
+                    remote.stop()
+                if not keep_alive:
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
+                return (False, None, None, None) if keep_alive else False
+
+            cookies = context.cookies()
+            if not cookies:
+                print("  未捕获到 Cookie。")
+                if remote:
+                    remote.stop()
+                if not keep_alive:
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
+                return (False, None, None, None) if keep_alive else False
+
+            _save_cookies_json(cookies, cookie_file)
+            netscape_path = cookie_file.with_suffix(".txt")
+            _save_cookies_netscape(cookies, netscape_path)
+            log.info(f"   [browser] Login cookies saved manually. Saved {len(cookies)} cookies.")
+            print(f"  Cookie 已保存至 {cookie_file}")
+            if auto_import:
+                _import_to_browser(netscape_path, config)
+            if remote:
+                remote.stop()
+            if keep_alive:
+                return True, context, page
+            browser.close()
+            return True
+
         elapsed = 0
         while elapsed < max_wait:
             time.sleep(3)
@@ -314,7 +357,12 @@ def open_login_browser(
                 return True
 
             url_lower = current_url.lower()
-            if "login" not in url_lower and "cas" not in url_lower and "sso" not in url_lower:
+            if (
+                not detect_login
+                and "login" not in url_lower
+                and "cas" not in url_lower
+                and "sso" not in url_lower
+            ):
                 cookies = context.cookies()
                 if len(cookies) > 3:
                     _save_cookies_json(cookies, cookie_file)
@@ -359,7 +407,59 @@ def webvpn_login(config: dict[str, Any]) -> bool:
     cache_dir = Path(config.get("cache_dir", str(DATA_DIR / "cache")))
     cookie_file = cache_dir / "instsci_cookies.json"
 
-    return open_login_browser(base, config, cookie_file=cookie_file, max_wait=600)
+    base_host = urlparse(base).hostname or ""
+
+    def detect_webvpn_cookie(context: Any, page: Any) -> bool:
+        url_lower = page.url.lower()
+        if any(token in url_lower for token in ("login", "cas", "sso", "authserver")):
+            return False
+
+        try:
+            if page.locator("input[type='password'], input[type=password]").count() > 0:
+                return False
+        except Exception:
+            pass
+
+        try:
+            body_text = page.locator("body").inner_text(timeout=1000)
+        except Exception:
+            body_text = ""
+
+        login_markers = ("上网账号登录", "双重登录认证", "微信账号绑定", "验证码")
+        if any(marker in body_text for marker in login_markers):
+            return False
+
+        success_markers = ("自定义访问", "最近访问", "校内资源", "电子资源", "退出", "注销")
+        if any(marker in body_text for marker in success_markers):
+            return True
+
+        cookies = context.cookies()
+        initial_names = {
+            "wengine_vpn_ticketwebvpn_zju_edu_cn",
+            "route",
+            "show_vpn",
+            "show_fast",
+            "heartbeat",
+            "show_faq",
+        }
+        same_site = [
+            c for c in cookies
+            if base_host and base_host in (c.get("domain") or "").lstrip(".")
+        ]
+        has_new_webvpn_cookie = any(
+            (c.get("name") or "") not in initial_names for c in same_site
+        )
+        return len(cookies) > 6 and has_new_webvpn_cookie
+
+    return open_login_browser(
+        base,
+        config,
+        cookie_file=cookie_file,
+        detect_login=detect_webvpn_cookie,
+        manual_confirm=True,
+        auto_import=False,
+        max_wait=600,
+    )
 
 
 def carsi_login(publisher: str, config: dict[str, Any], *, login_url: str, domains: list[str]) -> bool:
