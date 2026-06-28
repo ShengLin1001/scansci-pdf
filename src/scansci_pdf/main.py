@@ -128,6 +128,45 @@ def get_paper(
         print(f"  Hint: 运行 scansci-pdf login 配置机构代理，或检查网络连接")
 
 
+@app.command("webvpn-get")
+def webvpn_get_paper(
+    identifier: str = typer.Argument(help="DOI"),
+    output: str = typer.Option("", help="Output directory"),
+    browser: bool = typer.Option(False, "--browser", help="Use WebVPN browser flow if HTTP cookies are not enough"),
+) -> None:
+    """Download a paper through configured WebVPN only."""
+    from .config import load_config
+    from .identifiers import normalize_doi, safe_filename
+    from .pdf_utils import is_pdf_file
+    from .sources.instsci import _try_instsci_http, _validate_session, try_instsci
+
+    config = load_config()
+    if not config.get("instsci_enabled"):
+        print("  FAILED: instsci_enabled is false. Run setup/config-cmd first.")
+        raise typer.Exit(1)
+
+    doi = normalize_doi(identifier)
+    target_dir = Path(output or config.get("output_dir", "."))
+    target_dir.mkdir(parents=True, exist_ok=True)
+    output_path = target_dir / f"{safe_filename(doi)}_WebVPN.pdf"
+
+    print(f"  WebVPN-only DOI: {doi}")
+    print(f"  Output: {output_path}")
+    if not browser and not _validate_session(config):
+        print("  Warning: saved WebVPN cookies do not pass the login check.")
+        print("  The request may be redirected to https://webvpn.zju.edu.cn/login.")
+
+    result = try_instsci(doi, output_path, config) if browser else _try_instsci_http(doi, output_path, config)
+    if result and result.get("success") and is_pdf_file(Path(result.get("file", output_path))):
+        print(f"  OK: {result.get('file', str(output_path))}")
+        print(f"  Source: {result.get('source', 'WebVPN')}")
+        return
+
+    print("  FAILED: WebVPN-only download did not return a valid PDF.")
+    print("  Hint: refresh WebVPN login, or retry with --browser for the same WebVPN route.")
+    raise typer.Exit(1)
+
+
 @app.command("browser-status")
 def browser_status() -> None:
     """Check CloakBrowser availability."""
@@ -334,12 +373,12 @@ def fetch_paper_cmd(
 
     Cascade: cache → OA → Elsevier API → DOI resolve → CARSI → publisher → browser → gateway.
     """
-    from .institutional.config_adapter import ConfigAdapter
-    from .institutional.fetcher import PaperFetcher
+    from .config import load_config
+    from .fetcher import PaperFetcher
 
-    config = ConfigAdapter.load()
+    config = load_config()
     if output:
-        config._config["output_dir"] = output
+        config["output_dir"] = output
 
     fetcher = PaperFetcher(config)
     result = fetcher.fetch_with_result(identifier, use_cache=not no_cache)
