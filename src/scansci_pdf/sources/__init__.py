@@ -298,10 +298,11 @@ def _build_free_sources(doi: str, config: dict[str, Any]) -> list[tuple[Any, str
     if config.get("openalex_api_key"):
         sources.append((try_openalex_content_api, "OpenAlexContent"))
 
+    # scihub_enabled gates all shadow-library / grey sources (Sci-Hub, SciBban,
+    # LibGen), matching the documented behavior in README's config reference.
     if config.get("scihub_enabled", False):
         sources.append((try_scibban, "SciBban"))
-    sources.append((try_libgen, "LibGen"))
-    if config.get("scihub_enabled", False):
+        sources.append((try_libgen, "LibGen"))
         sources.append((try_scihub, "Sci-Hub"))
 
     return sort_sources(sources)
