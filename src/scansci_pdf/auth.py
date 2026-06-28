@@ -45,6 +45,27 @@ def _get_profile_dir(config: dict) -> Path:
     return data_dir / "browser_profiles" / "webvpn"
 
 
+def _is_campus_connector(config: dict) -> bool:
+    """True only for a real campus connector (SOCKS5 + EasyConnect/aTrust school).
+
+    A general HTTP/SOCKS proxy (e.g. Clash for bypassing the GFW) is NOT a campus
+    connector: it does not grant institutional IP access, so WebVPN cookie login
+    and URL rewriting are still required. Only EasyConnect/aTrust connectors
+    authenticate at the network layer, letting us skip login and fetch raw URLs.
+    """
+    proxy = config.get("network_proxy", "").strip()
+    if not proxy.lower().startswith("socks5://"):
+        return False
+    school = config.get("instsci_school", "")
+    if not school:
+        return False
+    try:
+        from .schools import get_school
+        return getattr(get_school(school), "school_type", "") in ("easyconnect", "atrust")
+    except Exception:
+        return False
+
+
 class WebVPNAuth:
     """Manages campus access authentication and URL conversion.
 
@@ -133,8 +154,7 @@ class WebVPNAuth:
 
     def login(self, force: bool = False) -> bool:
         """Ensure we have a valid session."""
-        proxy = self.config.get("network_proxy", "")
-        if proxy:
+        if _is_campus_connector(self.config):
             logger.info("Connector mode: skipping login (connector handles auth).")
             return True
 
@@ -153,8 +173,7 @@ class WebVPNAuth:
         return self._validate_session()
 
     def _validate_session(self) -> bool:
-        proxy = self.config.get("network_proxy", "")
-        if proxy:
+        if _is_campus_connector(self.config):
             test_url = TEST_URL
         else:
             test_url = self.convert_url(TEST_URL)
@@ -318,8 +337,7 @@ class WebVPNAuth:
         kwargs.setdefault("timeout", 30)
         kwargs.setdefault("allow_redirects", True)
 
-        proxy = self.config.get("network_proxy", "")
-        if proxy:
+        if _is_campus_connector(self.config):
             return self.session.get(url, **kwargs)
 
         if self._webvpn_base in url:

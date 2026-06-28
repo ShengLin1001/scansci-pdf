@@ -280,7 +280,7 @@ def open_login_browser(
             print("  页面加载超时，但仍可手动登录。")
 
         if manual_confirm:
-            print("  完成网页登录并看到 WebVPN 首页后，回到这个终端按 Enter 保存 Cookie。")
+            print("  完成网页登录并看到已登录页面后，回到这个终端按 Enter 保存 Cookie。")
             print("  如果还没有登录完成，不要按 Enter。\n")
             try:
                 input()
@@ -483,7 +483,8 @@ def carsi_login(publisher: str, config: dict[str, Any], *, login_url: str, domai
         config,
         cookie_file=cookie_file,
         detect_login=_detect,
-        max_wait=180,
+        manual_confirm=True,
+        max_wait=600,
     )
 
 
