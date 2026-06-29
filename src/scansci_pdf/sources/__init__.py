@@ -438,7 +438,18 @@ def _run_tiers_parallel(
         else:
             grace = 15
         log.info(f"   Racing timed out after {overall_timeout + 5}s, waiting up to {grace}s for late results...")
-        success_event.wait(timeout=grace)
+        # Wait for a late success, but stop as soon as every worker has actually
+        # finished — otherwise a pool where all sources already failed would
+        # block the full grace window (up to 300s) for nothing.
+        _grace_deadline = time.monotonic() + grace
+        while True:
+            _remaining = _grace_deadline - time.monotonic()
+            if _remaining <= 0:
+                break
+            if success_event.wait(timeout=min(2.0, _remaining)):
+                break
+            if all(f.done() for f in futures):
+                break
         if shared_result["result"] is not None:
             result, label, src_output = shared_result["result"]
             final_path = Path(result.get("file", ""))
