@@ -33,6 +33,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "network_proxy": "",
     "scihub_enabled": True,
     "scihub_domains": DEFAULT_SCIHUB_DOMAINS,
+    "exclude_preprints": False,
     "instsci_enabled": False,
     "instsci_school": "",
     "instsci_base_url": "",

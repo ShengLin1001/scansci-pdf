@@ -17,6 +17,47 @@ except Exception:
     BeautifulSoup = None
 
 
+# Preprint / non-peer-reviewed servers. When config["exclude_preprints"] is
+# enabled, download_pdf refuses PDFs served from these hosts so a DOI download
+# never silently yields a preprint instead of the published article.
+_PREPRINT_HOSTS = (
+    "arxiv.org",
+    "biorxiv.org",
+    "medrxiv.org",
+    "chemrxiv.org",
+    "preprints.org",
+    "researchsquare.com",
+    "ssrn.com",
+    "techrxiv.org",
+    "authorea.com",
+    "eartharxiv.org",
+    "psyarxiv.com",
+)
+
+
+def _config_flag(config: dict[str, Any], key: str, default: bool = False) -> bool:
+    """Read a boolean config flag, tolerating string values ("true"/"false").
+
+    The CLI `config-cmd` setter stores raw strings, so "false" must not be
+    treated as truthy.
+    """
+    value = config.get(key, default)
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
+
+
+def is_preprint_url(url: str) -> bool:
+    """True if the URL is hosted on a known preprint server."""
+    try:
+        host = (urllib.parse.urlparse(url).hostname or "").lower()
+    except Exception:
+        return False
+    if not host:
+        return False
+    return any(host == h or host.endswith("." + h) for h in _PREPRINT_HOSTS)
+
+
 def is_pdf_file(path: Path) -> bool:
     try:
         size = path.stat().st_size
@@ -221,6 +262,10 @@ def download_pdf(
     if require_pdf_like_url and not is_plausible_pdf_url(url):
         return None
 
+    exclude_preprints = _config_flag(config, "exclude_preprints")
+    if exclude_preprints and is_preprint_url(url):
+        return None
+
     try:
         if cookies is not None:
             from .network import request_timeout, proxy_dict, select_proxy_for_url, USER_AGENT
@@ -238,6 +283,9 @@ def download_pdf(
         else:
             resp = fetch(url, config, stream=True, use_tor=use_tor)
         if resp.status_code >= 400:
+            return None
+        # Catch OA/landing links that redirect to a preprint server.
+        if exclude_preprints and is_preprint_url(resp.url):
             return None
 
         iterator = resp.iter_content(chunk_size=8192)
