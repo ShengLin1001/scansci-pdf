@@ -77,37 +77,43 @@ def _visible_browser(config: dict[str, Any], publisher: str, *, viewport: dict |
     """Open visible CloakBrowser with persistent profile. Falls back to ephemeral."""
     if not _HAS_CLOAKBROWSER:
         raise RuntimeError("cloakbrowser not installed. Run: pip install cloakbrowser")
-    from .browser_engine import _build_browser_args
+    from .browser_engine import _build_browser_args, set_visible_browser_active
     profile_dir = _get_profile_dir(config, publisher)
     browser = None
     args = _build_browser_args(config)
 
+    # Mark this thread so browser_engine won't launch a second sync-Playwright
+    # browser here (e.g. during cookie bridging) and trip the asyncio-loop guard.
+    set_visible_browser_active(True)
     try:
-        ctx = launch_persistent_context(
-            str(profile_dir),
-            headless=False, humanize=True,
-            args=args,
-        )
-        page = ctx.new_page()
-        log.info(f"   [{publisher}] persistent browser profile: {profile_dir}")
-    except Exception as _e:
-        log.info(f"   [{publisher}] persistent context unavailable ({_e}), using ephemeral")
-        _vp = viewport or {"width": 1440, "height": 900}
-        browser = launch(headless=False, humanize=True, args=args)
-        ctx = browser.new_context(viewport=_vp)
-        _restore_cookies_to_context(ctx, config)
-        page = ctx.new_page()
-
-    try:
-        yield ctx, page
-    finally:
         try:
-            if browser:
-                browser.close()
-            else:
-                ctx.close()
-        except Exception:
-            pass
+            ctx = launch_persistent_context(
+                str(profile_dir),
+                headless=False, humanize=True,
+                args=args,
+            )
+            page = ctx.new_page()
+            log.info(f"   [{publisher}] persistent browser profile: {profile_dir}")
+        except Exception as _e:
+            log.info(f"   [{publisher}] persistent context unavailable ({_e}), using ephemeral")
+            _vp = viewport or {"width": 1440, "height": 900}
+            browser = launch(headless=False, humanize=True, args=args)
+            ctx = browser.new_context(viewport=_vp)
+            _restore_cookies_to_context(ctx, config)
+            page = ctx.new_page()
+
+        try:
+            yield ctx, page
+        finally:
+            try:
+                if browser:
+                    browser.close()
+                else:
+                    ctx.close()
+            except Exception:
+                pass
+    finally:
+        set_visible_browser_active(False)
 
 
 def _save_all_cookie_formats(
@@ -1674,6 +1680,46 @@ def _browser_download(
         close_tab(tab_id, config)
 
 
+def _run_visible_browser_isolated(
+    doi: str,
+    article_url: str,
+    output_path: Path,
+    config: dict[str, Any],
+    publisher: str,
+) -> dict[str, Any] | None:
+    """Run the visible-browser fallback in a fresh, dedicated thread.
+
+    The headless path (_browser_download) leaves a live sync-Playwright
+    instance bound to the current racing-worker thread via browser_engine's
+    per-thread shared browser. Starting a second sync-Playwright in that same
+    thread trips Playwright's "Sync API inside the asyncio loop" guard, because
+    its event loop is already running. Running the whole visible-browser flow
+    in a brand-new thread gives sync Playwright a clean thread with no running
+    loop. The flow is fully self-contained (opens and closes its own browser
+    via _visible_browser), so it never touches the racing thread's browser.
+
+    When this runs inside a *losing* race thread (the winner already saved the
+    PDF and the process is exiting), the interpreter may already be tearing
+    down its thread machinery, so spawning a worker raises RuntimeError. The
+    fallback is moot at that point, so degrade quietly instead of surfacing a
+    confusing error. Note: sys.is_finalizing() is unreliable here — on CPython
+    the concurrent.futures shutdown flag is set before the interpreter's
+    finalizing flag — so we detect this by catching the RuntimeError.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    try:
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"vbd-{publisher}") as pool:
+            return pool.submit(
+                _visible_browser_download, doi, article_url, output_path, config, publisher
+            ).result()
+    except RuntimeError as e:
+        if "shutdown" in str(e).lower():
+            log.info(f"   [{publisher}] interpreter shutting down, skipping visible browser fallback")
+            return None
+        raise
+
+
 def _browser_download_with_fallback(
     doi: str,
     article_url: str,
@@ -1691,7 +1737,7 @@ def _browser_download_with_fallback(
     if err_type in ("paywall", "navigate_failed", "cloudflare_blocked") and config.get("carsi_idp_name"):
         log.info(f"   [{publisher}] headless failed ({err_type}), trying visible browser fallback...")
         try:
-            vbd_result = _visible_browser_download(doi, article_url, output_path, config, publisher)
+            vbd_result = _run_visible_browser_isolated(doi, article_url, output_path, config, publisher)
             if vbd_result:
                 return True
         except Exception as e:

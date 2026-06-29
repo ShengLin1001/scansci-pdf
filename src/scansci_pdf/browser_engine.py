@@ -53,6 +53,22 @@ import threading as _threading
 _tls = _threading.local()
 
 
+def set_visible_browser_active(active: bool) -> None:
+    """Mark the current thread as running a live visible-browser Playwright.
+
+    Playwright's sync API forbids two sync instances on one thread ("Sync API
+    inside the asyncio loop"). The visible-browser fallback in
+    publisher_strategies launches its own sync browser; while it is live,
+    _get_shared_browser must NOT launch a second one on the same thread.
+    Callers (e.g. the cookie bridge) fall back to the on-disk Netscape file.
+    """
+    _tls.visible_browser_active = bool(active)
+
+
+def _visible_browser_active() -> bool:
+    return bool(getattr(_tls, "visible_browser_active", False))
+
+
 def _build_browser_args(config: dict[str, Any] | None = None) -> list[str]:
     """Build Chromium launch args from config (proxy, flags, etc.)."""
     args = ["--disable-features=CrossOriginOpenerPolicy"]
@@ -69,6 +85,12 @@ def _get_shared_browser(config: dict[str, Any] | None = None):
     context = getattr(_tls, "context", None)
     if browser is not None:
         return browser, context
+
+    if _visible_browser_active():
+        # A visible-browser sync-Playwright is already live on this thread;
+        # launching a second one would raise the "Sync API inside the asyncio
+        # loop" error. Callers handle this RuntimeError gracefully.
+        raise RuntimeError("visible browser active on this thread; refusing to launch shared browser")
 
     if not _check_cloakbrowser():
         raise RuntimeError("cloakbrowser not installed. Run: pip install cloakbrowser")
@@ -320,6 +342,12 @@ def import_cookies(cookie_file: str | Path, config: dict[str, Any], *, domain_su
         ctx.add_cookies(cookies)
         logger.info(f"browser_engine: imported {len(cookies)} cookies")
         return len(cookies)
+    except RuntimeError as e:
+        if "visible browser active" in str(e):
+            logger.info("browser_engine: skipping in-process cookie bridge (visible browser active); cookies saved to disk")
+            return 0
+        logger.info(f"browser_engine: import_cookies error: {e}")
+        return 0
     except Exception as e:
         logger.info(f"browser_engine: import_cookies error: {e}")
         return 0
