@@ -1,0 +1,1 @@
+scanscipy 是 .bash_soft_env 文件中定义的一个 alias， 用于快速激活一个特定的 Python 虚拟环境，该环境中预装了当前 scansci-pdf package.
