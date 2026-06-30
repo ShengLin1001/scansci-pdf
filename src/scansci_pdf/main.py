@@ -172,6 +172,59 @@ def webvpn_get_paper(
     raise typer.Exit(1)
 
 
+@app.command("browser-get")
+def browser_get_paper(
+    identifiers: list[str] = typer.Argument(None, help="One or more DOIs (optional if --file is given)"),
+    output: str = typer.Option("", help="Output directory"),
+    file: str = typer.Option("", "--file", "-f", help="Read DOIs from a file (one per line; blank lines and # comments ignored)"),
+    wait: int = typer.Option(300, help="Seconds to wait per paper for manual verification"),
+    manual: bool = typer.Option(False, "--manual", "-m", help="Manual mode: you verify/login/open the PDF; the script only captures whichever PDF appears (works on any publisher, incl. IEEE/ACM/Elsevier)"),
+) -> None:
+    """Download papers from the publisher's OFFICIAL site only, via a visible browser.
+
+    Opens the real publisher page (no WebVPN rewriting) so you can clear any
+    human-verification (Cloudflare) by hand, then grabs the official PDF itself
+    (no manual PDF click needed). There is no Sci-Hub/LibGen fallback, so the
+    result is guaranteed to be the official version. Requires institutional
+    access on this machine (on-campus network or a full-tunnel VPN client).
+    Pass several DOIs — or a --file of DOIs — to verify them one by one in the
+    same browser window.
+
+    With --manual, the script does NOT try to find the PDF itself: you drive the
+    browser (verify, log in, open the article PDF) and it saves whichever PDF
+    shows up. Use this for publishers the auto mode can't crack (IEEE, ACM, some
+    Elsevier).
+    """
+    from .config import load_config
+    from .sources.browser_direct import run_browser_session
+
+    dois: list[str] = list(identifiers or [])
+    if file:
+        path = Path(file)
+        if not path.exists():
+            print(f"  Error: file not found: {file}")
+            raise typer.Exit(1)
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                dois.append(line)
+
+    # De-duplicate while preserving order.
+    seen: set[str] = set()
+    dois = [d for d in dois if not (d in seen or seen.add(d))]
+
+    if not dois:
+        print("  Error: 请提供至少一个 DOI，或用 --file 指定文件。")
+        raise typer.Exit(1)
+
+    config = load_config()
+    results = run_browser_session(dois, output or None, config, manual_wait=wait, manual=manual)
+    ok = sum(1 for r in results if r.get("success"))
+    print(f"\n  Done: {ok}/{len(results)} from publisher official site.")
+    if ok < len(results):
+        raise typer.Exit(1)
+
+
 @app.command("browser-status")
 def browser_status() -> None:
     """Check CloakBrowser availability."""
