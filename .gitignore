@@ -28,6 +28,7 @@ webvpn.dat
 
 # Test artifacts
 test_output/
+mytest/
 
 # Claude Code local settings
 .claude/
